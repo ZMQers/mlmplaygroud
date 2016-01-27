@@ -24,15 +24,22 @@ int main (int argc, char **argv) {
         mlm_client_destroy (&client);
         return -2;
     }
-
+    int count = 0;
     while (!zsys_interrupted) {
-        zclock_sleep(1000);
+        // zclock_sleep(2);
         zmsg_t *msg = zmsg_new();
         assert (msg);
         zmsg_pushstr (msg, "hello");
-        zmsg_print(msg);
+        //zmsg_print(msg);
         mlm_client_send (client, "testing message", &msg);
         zmsg_destroy (&msg);
+        count++;
+        if (count % 100 == 0) {
+            zsys_info("%i messages sent",count);
+        }
+        if( count == 10000 ) {
+            break;
+        }
     }
     mlm_client_destroy(&client);
     zsys_info ("finished.");
