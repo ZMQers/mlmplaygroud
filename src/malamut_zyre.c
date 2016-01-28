@@ -27,6 +27,7 @@
 #include "zyre.h"
 #include "malamute.h"
 
+const int s_interval = 1000;
 
 static void
 zyre_shout_fn(zsock_t *pipe, void *args)
@@ -83,86 +84,132 @@ zyre_shout_fn(zsock_t *pipe, void *args)
     zpoller_destroy(&poller);
 }
 
+typedef struct  {
+    bool terminated;
+    bool shout_received;
+    bool is_winner;
+    zsock_t *pipe;
+    zyre_t *zyre_node;
+    char *group_name;
+} ctrl_block; 
+
+static int
+s_zyre_watch_shout(zloop_t *loop, int timer_id, void *arg)
+{
+    ctrl_block *ctrl = (ctrl_block*)arg;
+    if (!ctrl->shout_received && !ctrl->is_winner) {
+        zstr_sendx(ctrl->pipe, "START",  NULL);
+        ctrl->is_winner = true;
+    }
+    ctrl->shout_received = false;
+    return 0;
+}
+
+static int
+s_zyre_command_handler(zloop_t *loop, zsock_t *reader, void *arg)
+{
+    ctrl_block *ctrl = (ctrl_block*)arg;
+    zmsg_t *msg = zmsg_recv(ctrl->pipe);
+    if (!msg)
+        return -1;              //  Interrupted
+    char *command = zmsg_popstr(msg);
+
+    if (streq (command, "$TERM")) {
+        ctrl->terminated = true;
+    }
+    else
+    if (streq(command, "SHOUT")) { 
+        char *string = zmsg_popstr(msg);
+        zyre_shouts(ctrl->zyre_node, ctrl->group_name, "%s", string);
+        zsys_info("SHOUT SEND");
+    }
+    else {
+        puts ("E: invalid message to actor");
+        assert (false);
+    }
+    free(command);
+    zmsg_destroy (&msg);
+    return 0;
+}
+
+static int
+s_zyre_protocol_handler(zloop_t *loop, zsock_t *reader, void *arg)
+{
+    ctrl_block *ctrl = (ctrl_block*)arg;
+    zmsg_t *msg = zmsg_recv (zyre_socket (ctrl->zyre_node));
+    char *event = zmsg_popstr(msg);
+    char *peer = zmsg_popstr(msg);
+    char *name = zmsg_popstr(msg);
+    char *group = zmsg_popstr(msg);
+    char *message = zmsg_popstr(msg);
+
+    if (streq(event, "SHOUT")) {
+        const char *uuid = zyre_uuid(ctrl->zyre_node);
+        size_t uuid_len = strlen(uuid);
+        bool i_won = strcmp(uuid, peer) < 0;
+        zsys_info("SHOUT from %s, (I win: %d)", peer, i_won);
+        if (!i_won)
+            ctrl->shout_received = true;
+        if (i_won != ctrl->is_winner) {
+            ctrl->is_winner = i_won;
+            if (ctrl->is_winner) {
+                zstr_sendx(ctrl->pipe, "START",  NULL);
+            } else {
+                zstr_sendx(ctrl->pipe, "STOP",  NULL);
+            }
+        } else {
+            zstr_sendx(ctrl->pipe, "SHOUT", NULL);
+        }
+    }
+
+    free (event);
+    free (peer);
+    free (name);
+    free (group);
+    free (message);
+    zmsg_destroy (&msg);
+}
+
 static void 
 zyre_fn(zsock_t *pipe, void *args)
 {
     char *group_name = (char*)args;
-    zyre_t *node = zyre_new (NULL);
-    if (!node)
+
+    ctrl_block ctrl;
+    ctrl.terminated = false;
+    ctrl.is_winner = true;
+    ctrl.shout_received = true;
+    ctrl.group_name = group_name;
+    ctrl.pipe = pipe;
+    ctrl.zyre_node = zyre_new (NULL);
+    if (!ctrl.zyre_node)
         return;                 //  Could not create new node
-
-    //zyre_set_verbose (node);  // uncomment to watch the events
-    zyre_start(node);
-
-    zsys_info("zyre: Joining group %s as %s", group_name, zyre_uuid(node));
-    zyre_join(node, group_name);
 
     zsock_signal (pipe, 0);     //  Signal "ready" to caller
 
-    bool terminated = false;
-    bool winner = true;
-    zpoller_t *poller = zpoller_new (pipe, zyre_socket (node), NULL);
-    while (!terminated) {
-        void *which = zpoller_wait (poller, -1); // no timeout
-        if (which == pipe) {
-            zmsg_t *msg = zmsg_recv (which);
-            if (!msg)
-                break;              //  Interrupted
-            char *command = zmsg_popstr (msg);
-            if (streq (command, "$TERM")) {
-                terminated = true;
-            }
-            else
-            if (streq(command, "SHOUT")) { 
-                char *string = zmsg_popstr(msg);
-                zyre_shouts(node, group_name, "%s", string);
-                zsys_info("SHOUT SEND");
-            }
-            else {
-                puts ("E: invalid message to actor");
-                assert (false);
-            }
-            free (command);
-            zmsg_destroy (&msg);
-        }
-        else if (which == zyre_socket (node)) {
-            zmsg_t *msg = zmsg_recv (which);
-            char *event = zmsg_popstr (msg);
-            char *peer = zmsg_popstr (msg);
-            char *name = zmsg_popstr (msg);
-            char *group = zmsg_popstr (msg);
-            char *message = zmsg_popstr (msg);
+    //zyre_set_verbose (node);  // uncomment to watch the events
+    zyre_start(ctrl.zyre_node);
+    zsys_info("zyre: Joining group %s as %s", group_name, zyre_uuid(ctrl.zyre_node));
+    zyre_join(ctrl.zyre_node, group_name);
 
-            if (streq(event, "SHOUT")) {
-                const char *uuid = zyre_uuid(node);
-                size_t uuid_len = strlen(uuid);
-                bool i_won = strcmp(uuid, peer) < 0;
-                if (i_won != winner) {
-                    winner = i_won;
-                    if (winner) {
-                        zstr_sendx(pipe, "START",  NULL);
-                    } else {
-                        zstr_sendx(pipe, "STOP",  NULL);
-                    }
+    zloop_t *loop = zloop_new();
 
-                }
-            }
+    zloop_timer(loop, s_interval, 0, s_zyre_watch_shout, &ctrl);
 
-            free (event);
-            free (peer);
-            free (name);
-            free (group);
-            free (message);
-            zmsg_destroy (&msg);
-        }
-    }
-    zpoller_destroy (&poller);
+    zloop_reader(loop, pipe, s_zyre_command_handler, &ctrl);
+    zloop_reader_set_tolerant(loop, pipe);
+
+    zloop_reader(loop, zyre_socket(ctrl.zyre_node), s_zyre_protocol_handler, &ctrl);
+    zloop_reader_set_tolerant(loop, zyre_socket(ctrl.zyre_node));
+
+    zloop_start(loop);
+    zloop_destroy(&loop);
 
     // Notify peers that this peer is shutting down. Provide
     // a brief interval to ensure message is emitted.
-    zyre_stop(node);
+    zyre_stop(ctrl.zyre_node);
     zclock_sleep(100);
-    zyre_destroy (&node);
+    zyre_destroy (&ctrl.zyre_node);
 }
 
 static void
@@ -215,7 +262,7 @@ int
 main (int argc, char *argv[])
 {
     if (argc < 2) {
-        puts ("syntax: ./chat group");
+        puts ("syntax: ./malamute_zyre group");
         exit (0);
     }
 
