@@ -27,6 +27,9 @@ if [ $BUILD_TYPE == "default" ]; then
     git clone --depth 1 https://github.com/zeromq/malamute malamute
     ( cd malamute && ./autogen.sh && ./configure "${CONFIG_OPTS[@]}" && make -j4 && make install ) || exit 1
 
+    git clone --depth 1 https://github.com/zeromq/libzyre libzyre
+    ( cd libzyre && ./autogen.sh && ./configure "${CONFIG_OPTS[@]}" && make -j4 && make install ) || exit 1
+
     # Build and check this project
     ( export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:${BUILD_PREFIX}/lib/pkgconfig; make DESTDIR=${BUILD_PREFIX}) || exit 1
 else
