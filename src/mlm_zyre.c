@@ -75,7 +75,7 @@ zyre_shout_fn(zsock_t *pipe, void *args)
         if (!terminated) {
             if (shout) {
                 zstr_sendx(z_node, "SHOUT", "I am the winner :)", NULL);
-                zclock_sleep(1000);
+                zclock_sleep(s_interval);
             } else {
             }
         }
