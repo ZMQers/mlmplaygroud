@@ -46,10 +46,10 @@ zyre_actor (zsock_t *pipe, void *args)
 
     bool terminated = false;
     zpoller_t *poller = zpoller_new (pipe, zyre_socket (node), NULL);
-    bool other_broker_present = false;
+    bool found_broker = false;
     while (!terminated) {
-        void *which = zpoller_wait (poller, timeout);
-        other_broker_present = false;
+        int64_t time_start = zclock_mono();
+        void *which = zpoller_wait (poller, 1000);
         if (which == pipe) {
             zmsg_t *msg = zmsg_recv (which);
             if (!msg)
@@ -93,15 +93,18 @@ zyre_actor (zsock_t *pipe, void *args)
             else if (streq (event, "SHOUT")) {
                 const char* uuid = zyre_uuid(node);
                 printf ("received SHOUT from %s: %s\n", name, message);
-                printf ("comparing my UUID %s and peer %s\n", uuid, peer);
+                //printf ("comparing my UUID %s and peer %s\n", uuid, peer);
                 if (strcmp(uuid, peer) > 0) {
-                   other_broker_present = true;
+                   // broker with lower ID found
+                   found_broker = true;
                    puts("I should (be) stop(ped) now");
                    if (server) {
                        puts("destroying server");
                        zactor_destroy (&server);
                        server = NULL;
                    }
+                } else {
+                    puts("ignoring");
                 }
             }
 	    else if (streq (event, "EVASIVE")) {
@@ -117,17 +120,22 @@ zyre_actor (zsock_t *pipe, void *args)
             free (message);
             zmsg_destroy (&msg);
         }
-        if(!other_broker_present && !terminated) {
-            zyre_shouts (node, group, "%s", "I'm here, ready to take over");
-            puts("I should be running now");
-            if (server == NULL) {
-                puts("creating new server");
-                server = zactor_new (mlm_server, "Malamute");
-                if(server)
-                    zstr_send(server, "VERBOSE");
-                else
-                    puts("E: server not created!");
+        int64_t time_end = zclock_mono();
+        bool shout_timeout = (time_end - time_start) > timeout;
+        if(shout_timeout && !terminated) {
+            if (!found_broker) {
+                zyre_shouts (node, group, "%s", "I'm here, ready to take over");
+                puts("I should be running now");
+                if (server == NULL) {
+                    puts("creating new server");
+                    server = zactor_new (mlm_server, "Malamute");
+                    if(server)
+                        zstr_send(server, "VERBOSE");
+                    else
+                        puts("E: server not created!");
+                }
             }
+            found_broker = false;
         }
     }
     zpoller_destroy (&poller);
