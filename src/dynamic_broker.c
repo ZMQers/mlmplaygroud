@@ -32,11 +32,12 @@ zyre_actor (zsock_t *pipe, void *args)
 {
     zactor_t *server = NULL;
     //  Do some initialization
-    char*   name = ((char**)args)[0];
-    char*   group = ((char**)args)[1];
-    int     timeout = atoi(((char**)args)[2]);
+    char   *name = ((char**)args)[0];
+    char   *group = ((char**)args)[1];
+    char   *endpoint = ((char**)args)[2];
+    int     timeout = atoi(((char**)args)[3]);
 
-    zyre_t *node = zyre_new (name); // name or NULL?
+    zyre_t *node = zyre_new (name);
     if (!node)
         return;                 //  Could not create new node
     //zyre_set_verbose (node);  // uncomment to watch the events
@@ -93,7 +94,7 @@ zyre_actor (zsock_t *pipe, void *args)
             else if (streq (event, "SHOUT")) {
                 const char* uuid = zyre_uuid(node);
                 printf ("received SHOUT from %s: %s\n", name, message);
-                //printf ("comparing my UUID %s and peer %s\n", uuid, peer);
+                // printf ("comparing my UUID %s and peer %s\n", uuid, peer);
                 if (strcmp(uuid, peer) > 0) {
                    // broker with lower ID found
                    found_broker = true;
@@ -124,14 +125,16 @@ zyre_actor (zsock_t *pipe, void *args)
         bool shout_timeout = (time_end - time_start) > timeout;
         if(shout_timeout && !terminated) {
             if (!found_broker) {
-                zyre_shouts (node, group, "%s", "I'm here, ready to take over");
+
+                zyre_shouts (node, group, "%s", endpoint);
                 puts("I should be running now");
                 if (server == NULL) {
                     puts("creating new server");
                     server = zactor_new (mlm_server, "Malamute");
-                    if(server)
+                    if(server) {
                         zstr_send(server, "VERBOSE");
-                    else
+                        zstr_sendx(server, "BIND", endpoint, NULL);
+                    } else
                         puts("E: server not created!");
                 }
             }
