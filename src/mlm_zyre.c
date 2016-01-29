@@ -29,61 +29,6 @@
 
 const int s_interval = 1000;
 
-static void
-zyre_shout_fn(zsock_t *pipe, void *args)
-{
-    zactor_t *z_node = (zactor_t*)(args);
-    zpoller_t *poller = zpoller_new(pipe, NULL);
-    zsock_signal (pipe, 0);     //  Signal "ready" to caller
-
-    bool terminated = false;
-    bool shout = true;
-    while(!terminated) {
-
-        void *which = NULL;
-
-        if (shout) {
-
-            which = zpoller_wait (poller, 0); // no timeout
-            terminated = zpoller_terminated(poller);
-
-        } else {
-            which = zpoller_wait (poller, -1); // no timeout
-        }
-
-        if (which == pipe) {
-            zmsg_t *msg = zmsg_recv(which);
-            char *command = zmsg_popstr(msg);
-            
-            if (streq (command, "$TERM")) {
-                terminated = true;
-            }
-            else
-            if (streq(command, "STOP")) {
-                zsys_info("SHOUT: STOP");
-                shout = false;
-            }
-            else 
-            if (streq(command, "START")) {
-                zsys_info("SHOUT: START");
-                shout = true;
-            }
-            free(command);
-            zmsg_destroy(&msg);
-        }
-
-        if (!terminated) {
-            if (shout) {
-                zstr_sendx(z_node, "SHOUT", "I am the winner :)", NULL);
-                zclock_sleep(s_interval);
-            } else {
-            }
-        }
-
-    }
-    zpoller_destroy(&poller);
-}
-
 typedef struct  {
     bool terminated;
     bool shout_received;
@@ -93,47 +38,37 @@ typedef struct  {
     char *group_name;
 } ctrl_block; 
 
-static int
-s_zyre_watch_shout(zloop_t *loop, int timer_id, void *arg)
+static void
+mlm_set_winner(ctrl_block *self, bool winner)
 {
-    ctrl_block *ctrl = (ctrl_block*)arg;
-    if (!ctrl->shout_received && !ctrl->is_winner) {
-        zstr_sendx(ctrl->pipe, "START",  NULL);
-        ctrl->is_winner = true;
+    self->is_winner = winner;
+    if (self->is_winner) {
+        zsys_info("I WON");
+        zstr_sendx(self->pipe, "START",  NULL);
+    } else {
+        zsys_info("I LOST");
+        zstr_sendx(self->pipe, "STOP",  NULL);
     }
-    ctrl->shout_received = false;
-    return 0;
 }
 
 static int
-s_zyre_command_handler(zloop_t *loop, zsock_t *reader, void *arg)
+s_mlm_shout_handler(zloop_t *loop, int timer_id, void *arg)
 {
     ctrl_block *ctrl = (ctrl_block*)arg;
-    zmsg_t *msg = zmsg_recv(ctrl->pipe);
-    if (!msg)
-        return -1;              //  Interrupted
-    char *command = zmsg_popstr(msg);
 
-    if (streq (command, "$TERM")) {
-        ctrl->terminated = true;
-    }
-    else
-    if (streq(command, "SHOUT")) { 
-        char *string = zmsg_popstr(msg);
-        zyre_shouts(ctrl->zyre_node, ctrl->group_name, "%s", string);
+    if (!ctrl->shout_received && !ctrl->is_winner)
+        mlm_set_winner(ctrl, true);
+
+    ctrl->shout_received = false;
+    if (ctrl->is_winner) {
+        zyre_shouts(ctrl->zyre_node, ctrl->group_name, "I am the winner");
         zsys_info("SHOUT SEND");
     }
-    else {
-        puts ("E: invalid message to actor");
-        assert (false);
-    }
-    free(command);
-    zmsg_destroy (&msg);
     return 0;
 }
 
 static int
-s_zyre_protocol_handler(zloop_t *loop, zsock_t *reader, void *arg)
+s_mlm_zyre_handler(zloop_t *loop, zsock_t *reader, void *arg)
 {
     ctrl_block *ctrl = (ctrl_block*)arg;
     zmsg_t *msg = zmsg_recv (zyre_socket (ctrl->zyre_node));
@@ -147,19 +82,12 @@ s_zyre_protocol_handler(zloop_t *loop, zsock_t *reader, void *arg)
         const char *uuid = zyre_uuid(ctrl->zyre_node);
         size_t uuid_len = strlen(uuid);
         bool i_won = strcmp(uuid, peer) < 0;
-        zsys_info("SHOUT from %s, (I win: %d)", peer, i_won);
+        //zsys_info("SHOUT from %s, (I win: %d)", peer, i_won);
         if (!i_won)
             ctrl->shout_received = true;
-        if (i_won != ctrl->is_winner) {
-            ctrl->is_winner = i_won;
-            if (ctrl->is_winner) {
-                zstr_sendx(ctrl->pipe, "START",  NULL);
-            } else {
-                zstr_sendx(ctrl->pipe, "STOP",  NULL);
-            }
-        } else {
-            zstr_sendx(ctrl->pipe, "SHOUT", NULL);
-        }
+        if (i_won != ctrl->is_winner)
+            mlm_set_winner(ctrl, i_won);
+
     }
 
     free (event);
@@ -194,12 +122,11 @@ zyre_fn(zsock_t *pipe, void *args)
 
     zloop_t *loop = zloop_new();
 
-    zloop_timer(loop, s_interval, 0, s_zyre_watch_shout, &ctrl);
+    zloop_timer(loop, s_interval, 0, s_mlm_shout_handler, &ctrl);
 
-    zloop_reader(loop, pipe, s_zyre_command_handler, &ctrl);
     zloop_reader_set_tolerant(loop, pipe);
 
-    zloop_reader(loop, zyre_socket(ctrl.zyre_node), s_zyre_protocol_handler, &ctrl);
+    zloop_reader(loop, zyre_socket(ctrl.zyre_node), s_mlm_zyre_handler, &ctrl);
     zloop_reader_set_tolerant(loop, zyre_socket(ctrl.zyre_node));
 
     zloop_start(loop);
@@ -239,6 +166,8 @@ broker_node_fn(zsock_t *pipe, void *args)
             if (streq (command, "START")) { 
                 if (!broker) {
                     broker = zactor_new(mlm_server, NULL);
+                    zstr_send(broker, "VERBOSE");
+                    zstr_sendx(broker, "BIND", "tcp://*:9999", NULL);
                     zsys_info("BROKER START");
                 }
             }
@@ -256,6 +185,7 @@ broker_node_fn(zsock_t *pipe, void *args)
 
     if (broker)
         zactor_destroy(&broker);
+    zpoller_destroy(&poller);
 }
 
 int 
@@ -268,14 +198,12 @@ main (int argc, char *argv[])
 
     zactor_t *zyre = zactor_new(zyre_fn, argv[1]);
     zactor_t *broker = zactor_new(broker_node_fn, argv[1]);
-    zactor_t *zyre_shout = zactor_new(zyre_shout_fn, (void*)zyre);
 
     assert (zyre);
     assert (zyre_shout);
     assert (broker);
 
-    zsys_info("%s", "Starting broker...!");
-    zstr_sendx(broker, "START", NULL);
+    zstr_sendx(broker, "START", NULL); // startin broker always
 
     zpoller_t *poller = zpoller_new (zyre, NULL);
     bool terminated = false;
@@ -286,14 +214,12 @@ main (int argc, char *argv[])
             zmsg_t *msg = zmsg_recv (which);
             if (!msg)
                 break;              //  Interrupted
-            zmsg_t *zyre_msg = zmsg_dup(msg);
-            zactor_send(zyre_shout, &zyre_msg);
             zactor_send(broker, &msg);
         }
     }
 
+    zpoller_destroy(&poller);
     zactor_destroy(&zyre);
-    zactor_destroy(&zyre_shout);
     zactor_destroy(&broker);
 
     return 0;
