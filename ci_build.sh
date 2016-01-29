@@ -27,7 +27,7 @@ if [ $BUILD_TYPE == "default" ]; then
     git clone --depth 1 https://github.com/zeromq/malamute malamute
     ( cd malamute && ./autogen.sh && ./configure "${CONFIG_OPTS[@]}" && make -j4 && make install ) || exit 1
 
-    git clone --depth 1 https://github.com/zeromq/libzyre libzyre
+    git clone --depth 1 https://github.com/zeromq/zyre libzyre
     ( cd libzyre && ./autogen.sh && ./configure "${CONFIG_OPTS[@]}" && make -j4 && make install ) || exit 1
 
     # Build and check this project
