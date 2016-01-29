@@ -129,9 +129,10 @@ zyre_actor (zsock_t *pipe, void *args)
                 if (server == NULL) {
                     puts("creating new server");
                     server = zactor_new (mlm_server, "Malamute");
-                    if(server)
+                    if(server) {
                         zstr_send(server, "VERBOSE");
-                    else
+                        zstr_sendx(server, "BIND", "tcp://*:9999", NULL);
+                    } else
                         puts("E: server not created!");
                 }
             }
