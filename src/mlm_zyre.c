@@ -61,7 +61,7 @@ s_mlm_shout_handler(zloop_t *loop, int timer_id, void *arg)
 
     ctrl->shout_received = false;
     if (ctrl->is_winner) {
-        zyre_shouts(ctrl->zyre_node, ctrl->group_name, "I am the winner");
+        zyre_shouts(ctrl->zyre_node, ctrl->group_name, "tcp://192.168.1.57:9999");
         zsys_info("SHOUT SEND");
     }
     return 0;
@@ -82,7 +82,7 @@ s_mlm_zyre_handler(zloop_t *loop, zsock_t *reader, void *arg)
         const char *uuid = zyre_uuid(ctrl->zyre_node);
         size_t uuid_len = strlen(uuid);
         bool i_won = strcmp(uuid, peer) < 0;
-        //zsys_info("SHOUT from %s, (I win: %d)", peer, i_won);
+        zsys_info("SHOUT from %s, (I win: %d)", peer, i_won);
         if (!i_won)
             ctrl->shout_received = true;
         if (i_won != ctrl->is_winner)
@@ -124,16 +124,12 @@ zyre_fn(zsock_t *pipe, void *args)
 
     zloop_timer(loop, s_interval, 0, s_mlm_shout_handler, &ctrl);
 
-    zloop_reader_set_tolerant(loop, pipe);
-
     zloop_reader(loop, zyre_socket(ctrl.zyre_node), s_mlm_zyre_handler, &ctrl);
     zloop_reader_set_tolerant(loop, zyre_socket(ctrl.zyre_node));
 
     zloop_start(loop);
-    zloop_destroy(&loop);
 
-    // Notify peers that this peer is shutting down. Provide
-    // a brief interval to ensure message is emitted.
+    zloop_destroy(&loop);
     zyre_stop(ctrl.zyre_node);
     zclock_sleep(100);
     zyre_destroy (&ctrl.zyre_node);
@@ -144,6 +140,8 @@ broker_node_fn(zsock_t *pipe, void *args)
 {
     zpoller_t *poller = zpoller_new(pipe, NULL);
     zactor_t *broker = NULL;
+
+    char *malamute_bind = (char*)args;
 
     zsock_signal (pipe, 0);     //  Signal "ready" to caller
     
@@ -167,7 +165,7 @@ broker_node_fn(zsock_t *pipe, void *args)
                 if (!broker) {
                     broker = zactor_new(mlm_server, NULL);
                     zstr_send(broker, "VERBOSE");
-                    zstr_sendx(broker, "BIND", "tcp://*:9999", NULL);
+                    zstr_sendx(broker, "BIND", malamute_bind, NULL);
                     zsys_info("BROKER START");
                 }
             }
@@ -191,8 +189,12 @@ broker_node_fn(zsock_t *pipe, void *args)
 int 
 main (int argc, char *argv[])
 {
-    if (argc < 2) {
-        puts ("syntax: ./malamute_zyre group");
+    if (argc < 3) {
+        zsys_info("syntax: ./%s groupname bind");
+        zsys_info("where:");
+        zsys_info("\tgroupname: zyre group name");
+        zsys_info("\tbind: bind value for malamute server");
+        zsys_info("e.g. ./%s district9 tcp://192.168.1.20:9999", argv[0], argv[0]);
         exit (0);
     }
 
