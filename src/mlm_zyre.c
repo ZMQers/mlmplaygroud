@@ -36,6 +36,7 @@ typedef struct  {
     zsock_t *pipe;
     zyre_t *zyre_node;
     char *group_name;
+    char *bind_point;
 } ctrl_block; 
 
 static void
@@ -61,7 +62,7 @@ s_mlm_shout_handler(zloop_t *loop, int timer_id, void *arg)
 
     ctrl->shout_received = false;
     if (ctrl->is_winner) {
-        zyre_shouts(ctrl->zyre_node, ctrl->group_name, "tcp://192.168.1.57:9999");
+        zyre_shouts(ctrl->zyre_node, ctrl->group_name, "%s", ctrl->bind_point);
         zsys_info("SHOUT SEND");
     }
     return 0;
@@ -101,13 +102,15 @@ s_mlm_zyre_handler(zloop_t *loop, zsock_t *reader, void *arg)
 static void 
 zyre_fn(zsock_t *pipe, void *args)
 {
-    char *group_name = (char*)args;
+    char *group_name = ((char**)args)[1];
+    char *bind = ((char**)args)[2];
 
     ctrl_block ctrl;
     ctrl.terminated = false;
     ctrl.is_winner = true;
     ctrl.shout_received = true;
     ctrl.group_name = group_name;
+    ctrl.bind_point = bind;
     ctrl.pipe = pipe;
     ctrl.zyre_node = zyre_new (NULL);
     if (!ctrl.zyre_node)
@@ -190,15 +193,15 @@ int
 main (int argc, char *argv[])
 {
     if (argc < 3) {
-        zsys_info("syntax: ./%s groupname bind");
+        zsys_info("syntax: ./%s groupname bind", argv[0]);
         zsys_info("where:");
         zsys_info("\tgroupname: zyre group name");
         zsys_info("\tbind: bind value for malamute server");
-        zsys_info("e.g. ./%s district9 tcp://192.168.1.20:9999", argv[0], argv[0]);
+        zsys_info("\example: ./%s district9 tcp://192.168.1.20:9999", argv[0]);
         exit (0);
     }
 
-    zactor_t *zyre = zactor_new(zyre_fn, argv[1]);
+    zactor_t *zyre = zactor_new(zyre_fn, argv);
     zactor_t *broker = zactor_new(broker_node_fn, argv[1]);
 
     assert (zyre);
